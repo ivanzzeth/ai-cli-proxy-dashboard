@@ -5,6 +5,57 @@ import { DEFAULT_VISUAL_VALUES } from '../src/types/visualConfig';
 import { runVisualConfig } from './helpers/visualConfig';
 
 describe('YAML document editing semantics', () => {
+  test('v8 client keys stay under access and keep upstream api-keys', () => {
+    const yaml = `config-version: 8
+access:
+  api-keys:
+    - existing
+api-keys:
+  openai-compatibility:
+    - name: sub2api
+      base-url: https://example.test/v1
+      models:
+        - name: gpt-5.6-sol
+      keys:
+        - api-key: upstream
+`;
+    const loaded = runVisualConfig(yaml);
+    expect(loaded.visualValues.apiKeysText).toBe('existing');
+    const edited = runVisualConfig(yaml, [{ apiKeysText: 'existing\nadded' }]);
+    const parsed = parseYaml(edited.applyVisualChangesToYaml(yaml)) as {
+      access: { 'api-keys': string[] };
+      'api-keys': { 'openai-compatibility': Array<{ name: string }> };
+    };
+    expect(parsed.access['api-keys']).toEqual(['existing', 'added']);
+    expect(parsed['api-keys']['openai-compatibility'][0].name).toBe('sub2api');
+  });
+
+  test('clearing v8 client keys does not delete upstream providers', () => {
+    const yaml = `config-version: 8
+access:
+  api-keys:
+    - existing
+api-keys:
+  openai-compatibility:
+    - name: sub2api
+`;
+    const edited = runVisualConfig(yaml, [{ apiKeysText: '' }]);
+    const parsed = parseYaml(edited.applyVisualChangesToYaml(yaml)) as {
+      access?: { 'api-keys'?: string[] };
+      'api-keys': { 'openai-compatibility': Array<{ name: string }> };
+    };
+    expect(parsed.access?.['api-keys']).toBeUndefined();
+    expect(parsed['api-keys']['openai-compatibility'][0].name).toBe('sub2api');
+  });
+
+  test('legacy client key lists still write to top-level api-keys', () => {
+    const yaml = 'api-keys:\n  - old\n';
+    const edited = runVisualConfig(yaml, [{ apiKeysText: 'old\nnew' }]);
+    expect(parseYaml(edited.applyVisualChangesToYaml(yaml))).toEqual({
+      'api-keys': ['old', 'new'],
+    });
+  });
+
   const numericFields = [
     ['port', 'port', '8317'],
     ['errorLogsMaxFiles', 'error-logs-max-files', '10'],

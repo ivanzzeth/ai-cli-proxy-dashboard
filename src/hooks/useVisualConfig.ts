@@ -55,9 +55,16 @@ function parseApiKeysText(raw: unknown): string {
 }
 
 function resolveApiKeysText(parsed: Record<string, unknown>): string {
-  if (Object.prototype.hasOwnProperty.call(parsed, 'api-keys')) {
+  const access = asRecord(parsed.access);
+  if (access && Object.prototype.hasOwnProperty.call(access, 'api-keys')) {
+    return parseApiKeysText(access['api-keys']);
+  }
+  // A mapping is the v8 upstream provider section, not the client key list.
+  if (Array.isArray(parsed['api-keys'])) {
     return parseApiKeysText(parsed['api-keys']);
   }
+  if (Object.prototype.hasOwnProperty.call(parsed, 'api-keys')) return '';
+
 
   const auth = asRecord(parsed.auth);
   const providers = asRecord(auth?.providers);
@@ -76,6 +83,19 @@ type YamlPath = string[];
 
 function docHas(doc: YamlDocument, path: YamlPath): boolean {
   return doc.hasIn(path);
+}
+
+function scalarText(node: unknown): string {
+  if (typeof node === 'string' || typeof node === 'number') return String(node);
+  if (isScalar(node)) return String(node.value ?? '');
+  return '';
+}
+
+// v8 stores upstream providers at `api-keys` and client keys at `access.api-keys`.
+function clientApiKeysUseAccessSection(doc: YamlDocument): boolean {
+  if (docHas(doc, ['access', 'api-keys'])) return true;
+  if (scalarText(doc.getIn(['config-version'], true)) === '8') return true;
+  return isMap(doc.getIn(['api-keys'], true));
 }
 
 function ensureMapInDoc(doc: YamlDocument, path: YamlPath): void {
@@ -1496,9 +1516,17 @@ export function useVisualConfig() {
             .split('\n')
             .map((key) => key.trim())
             .filter(Boolean);
-          if (apiKeys.length > 0) {
+          if (clientApiKeysUseAccessSection(doc)) {
+            if (apiKeys.length > 0) {
+              ensureMapInDoc(doc, ['access']);
+              doc.setIn(['access', 'api-keys'], apiKeys);
+            } else if (docHas(doc, ['access', 'api-keys'])) {
+              doc.deleteIn(['access', 'api-keys']);
+              deleteIfMapEmpty(doc, ['access']);
+            }
+          } else if (apiKeys.length > 0) {
             doc.setIn(['api-keys'], apiKeys);
-          } else if (docHas(doc, ['api-keys'])) {
+          } else if (docHas(doc, ['api-keys']) && !isMap(doc.getIn(['api-keys'], true))) {
             doc.deleteIn(['api-keys']);
           }
           deleteLegacyApiKeysProvider(doc);
